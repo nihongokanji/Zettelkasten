@@ -592,5 +592,11 @@
             <artifactId>jaxb-api</artifactId>
             <version>2.2.8</version>
         </dependency>
+
+        <dependency>
+            <groupId>org.scilab.forge</groupId>
+            <artifactId>jlatexmath</artifactId>
+            <version>1.0.7</version>
+        </dependency>
     </dependencies>
 </project>
