@@ -41,14 +41,13 @@ import java.awt.Color;
 import java.awt.Graphics2D;
 import java.awt.Image;
 import java.awt.image.BufferedImage;
-import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.IOException;
 import java.net.URL;
+import java.security.MessageDigest;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.Base64;
 import java.util.Deque;
 import java.util.Iterator;
 import java.util.LinkedList;
@@ -1611,25 +1610,49 @@ public class HtmlUbbUtil {
                 }
             }
         }
-        TeXFormula formula = new TeXFormula(latex);
-        TeXIcon icon = formula.new TeXIconBuilder()
-                .setStyle(style)
-                .setSize(size)
-                .setFGColor(Color.BLACK)
-                .build();
-        BufferedImage image = new BufferedImage(
-                Math.max(1, icon.getIconWidth()),
-                Math.max(1, icon.getIconHeight()),
-                BufferedImage.TYPE_INT_ARGB);
-        Graphics2D g = image.createGraphics();
-        try {
-            icon.paintIcon(null, g, 0, 0);
-        } finally {
-            g.dispose();
+        File cacheDir = new File(System.getProperty("java.io.tmpdir"), "zettelkasten-latex-cache");
+        cacheDir.mkdirs();
+        String hash = md5Hex(latex + "|" + style + "|" + size);
+        File cacheFile = new File(cacheDir, hash + ".png");
+        if (!cacheFile.exists()) {
+            TeXFormula formula = new TeXFormula(latex);
+            TeXIcon icon = formula.new TeXIconBuilder()
+                    .setStyle(style)
+                    .setSize(size)
+                    .setFGColor(Color.BLACK)
+                    .build();
+            BufferedImage image = new BufferedImage(
+                    Math.max(1, icon.getIconWidth()),
+                    Math.max(1, icon.getIconHeight()),
+                    BufferedImage.TYPE_INT_ARGB);
+            Graphics2D g = image.createGraphics();
+            try {
+                icon.paintIcon(null, g, 0, 0);
+            } finally {
+                g.dispose();
+            }
+            File tmp = new File(cacheDir, hash + ".png.tmp");
+            ImageIO.write(image, "png", tmp);
+            if (!tmp.renameTo(cacheFile)) {
+                tmp.delete();
+            }
         }
-        ByteArrayOutputStream baos = new ByteArrayOutputStream();
-        ImageIO.write(image, "png", baos);
-        return "<img src=\"data:image/png;base64," + Base64.getEncoder().encodeToString(baos.toByteArray()) + "\"/>";
+        return "<img src=\"" + cacheFile.toURI().toString() + "\"/>";
+    }
+
+    private static String md5Hex(String input) throws IOException {
+        try {
+            MessageDigest md = MessageDigest.getInstance("MD5");
+            byte[] digest = md.digest(input.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            StringBuilder hex = new StringBuilder(digest.length * 2);
+            for (byte b : digest) {
+                hex.append(Character.forDigit((b >> 4) & 0xF, 16));
+                hex.append(Character.forDigit(b & 0xF, 16));
+            }
+            return hex.toString();
+        } catch (java.security.NoSuchAlgorithmException ex) {
+            throw new IOException("MD5 algorithm not available", ex);
+        }
     }
 
     private static String restoreLatexSpans(String input, java.util.List<String> images) {
