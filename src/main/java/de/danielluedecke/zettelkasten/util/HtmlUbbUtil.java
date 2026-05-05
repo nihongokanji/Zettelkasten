@@ -37,13 +37,18 @@ import de.danielluedecke.zettelkasten.util.classes.Comparer;
 import de.danielluedecke.zettelkasten.database.Daten;
 import de.danielluedecke.zettelkasten.settings.Settings;
 import de.danielluedecke.zettelkasten.tasks.export.ExportTools;
+import java.awt.Color;
+import java.awt.Graphics2D;
 import java.awt.Image;
+import java.awt.image.BufferedImage;
+import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.IOException;
 import java.net.URL;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Base64;
 import java.util.Deque;
 import java.util.Iterator;
 import java.util.LinkedList;
@@ -55,6 +60,9 @@ import java.util.regex.PatternSyntaxException;
 import javax.imageio.ImageIO;
 import javax.swing.ImageIcon;
 import org.jdom2.Element;
+import org.scilab.forge.jlatexmath.TeXConstants;
+import org.scilab.forge.jlatexmath.TeXFormula;
+import org.scilab.forge.jlatexmath.TeXIcon;
 
 /**
  * This class is responsible for the creation of a HTML page of an Zettelkasten
@@ -445,7 +453,7 @@ public class HtmlUbbUtil {
             // the format codes into html-tags. the format codes are simplified tags
             // for the user to enable simple format editing
             boolean markdownActivated = settings != null && Boolean.TRUE.equals(settings.getMarkdownActivated());
-            remarks = replaceUbbToHtml(remarks, markdownActivated, false, false, false);
+            remarks = replaceUbbToHtml(remarks, markdownActivated, false, false, false, settings);
             // autoconvert url's to hyperlinks
             remarks = convertHyperlinks(remarks);
             // if parameters in the string array highlight-terms have been passed, we assume that
@@ -966,7 +974,7 @@ public class HtmlUbbUtil {
         }
         boolean markdownActivated = settings != null && Boolean.TRUE.equals(settings.getMarkdownActivated());
         String dummy = replaceUbbToHtml(normalized, markdownActivated,
-                (Constants.FRAME_DESKTOP == sourceframe), isExport, applyNormalization);
+                (Constants.FRAME_DESKTOP == sourceframe), isExport, applyNormalization, settings);
         if (applyNormalization) {
             dummy = fixBrokenTags(dummy, "<img[^>]*>");
             dummy = fixBrokenTags(dummy, "<a href=[^>]*>");
@@ -1407,7 +1415,12 @@ public class HtmlUbbUtil {
     }
 
     private static String replaceUbbToHtml(String dummy, boolean isMarkdownActivated, boolean isDesktop, boolean isExport,
-            boolean applyMarkdownNormalization) {
+            boolean applyMarkdownNormalization, Settings settings) {
+        // Render [latex_block] and [latex] spans to base64 PNG <img> tags before any
+        // other regex runs, then swap in placeholders for the rest of the pipeline so
+        // the rendered HTML cannot be mangled by HTML-escaping or UBB tag conversion.
+        java.util.List<String> latexImages = new java.util.ArrayList<>();
+        dummy = protectLatexSpans(dummy, latexImages, settings);
         // replace headlines
         String head1, head2, head3, head4;
         String head1md, head2md, head3md, head4md;
@@ -1546,7 +1559,92 @@ public class HtmlUbbUtil {
         dummy = dummy.replaceAll("\\[z ([^\\[]*)\\](.*?)\\[/z\\]", "<a class=\"manlink\" href=\"#z_$1\">$2</a>");
         // remove all new lines after headlines
         dummy = dummy.replaceAll("\\</h([^\\<]*)\\>\\<br\\>", "</h$1>");
+        dummy = restoreLatexSpans(dummy, latexImages);
         return dummy;
+    }
+
+    private static String protectLatexSpans(String input, java.util.List<String> images, Settings settings) {
+        if (input == null || input.indexOf("[latex") == -1) {
+            return input;
+        }
+        // Process block tags first; their longer delimiters would otherwise be partially
+        // matched by the inline pattern.
+        String text = replaceLatexMatches(input,
+                Pattern.compile("\\[latex_block\\](.*?)\\[/latex_block\\]", Pattern.DOTALL),
+                TeXConstants.STYLE_DISPLAY, true, images, settings);
+        text = replaceLatexMatches(text,
+                Pattern.compile("\\[latex\\](.*?)\\[/latex\\]", Pattern.DOTALL),
+                TeXConstants.STYLE_TEXT, false, images, settings);
+        return text;
+    }
+
+    private static String replaceLatexMatches(String input, Pattern pattern, int style, boolean blockWrap,
+            java.util.List<String> images, Settings settings) {
+        Matcher m = pattern.matcher(input);
+        StringBuffer sb = new StringBuffer(input.length());
+        while (m.find()) {
+            String rendered;
+            try {
+                String img = renderLatexToImgTag(m.group(1), style, settings);
+                rendered = blockWrap ? "<div style=\"text-align:center;\">" + img + "</div>" : img;
+            } catch (Exception ex) {
+                Constants.zknlogger.log(Level.FINE, "LaTeX render failed; leaving raw tag in place", ex);
+                rendered = m.group(0);
+            }
+            int idx = images.size();
+            images.add(rendered);
+            m.appendReplacement(sb, Matcher.quoteReplacement(latexToken(idx)));
+        }
+        m.appendTail(sb);
+        return sb.toString();
+    }
+
+    private static String renderLatexToImgTag(String latex, int style, Settings settings) throws IOException {
+        float size = 16f;
+        if (settings != null) {
+            String configured = settings.getMainfont(Settings.FONTSIZE);
+            if (configured != null && !configured.isEmpty()) {
+                try {
+                    size = Float.parseFloat(configured);
+                } catch (NumberFormatException ignore) {
+                    // fall back to default size
+                }
+            }
+        }
+        TeXFormula formula = new TeXFormula(latex);
+        TeXIcon icon = formula.new TeXIconBuilder()
+                .setStyle(style)
+                .setSize(size)
+                .setFGColor(Color.BLACK)
+                .build();
+        BufferedImage image = new BufferedImage(
+                Math.max(1, icon.getIconWidth()),
+                Math.max(1, icon.getIconHeight()),
+                BufferedImage.TYPE_INT_ARGB);
+        Graphics2D g = image.createGraphics();
+        try {
+            icon.paintIcon(null, g, 0, 0);
+        } finally {
+            g.dispose();
+        }
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        ImageIO.write(image, "png", baos);
+        return "<img src=\"data:image/png;base64," + Base64.getEncoder().encodeToString(baos.toByteArray()) + "\"/>";
+    }
+
+    private static String restoreLatexSpans(String input, java.util.List<String> images) {
+        if (images.isEmpty()) {
+            return input;
+        }
+        String restored = input;
+        for (int i = 0; i < images.size(); i++) {
+            restored = restored.replace(latexToken(i), images.get(i));
+        }
+        return restored;
+    }
+
+    private static String latexToken(int index) {
+        return "@@LATEX" + index + "@@";
     }
 
     private static CodeSpanExtraction protectMarkdownCodeSpans(String input) {
