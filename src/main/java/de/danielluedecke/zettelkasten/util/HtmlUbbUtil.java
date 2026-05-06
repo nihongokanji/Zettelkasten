@@ -466,7 +466,7 @@ public class HtmlUbbUtil {
             // now copy the content of the entry to a dummy string. here we convert
             // the format codes into html-tags. the format codes are simplified tags
             // for the user to enable simple format editing
-            remarks = replaceUbbToHtml(remarks, settings.getMarkdownActivated(), false, false);
+            remarks = replaceUbbToHtml(remarks, settings.getMarkdownActivated(), false, false, settings);
             // autoconvert url's to hyperlinks
             remarks = convertHyperlinks(remarks);
             // if parameters in the string array highlight-terms have been passed, we assume that
@@ -905,7 +905,7 @@ public class HtmlUbbUtil {
      */
     public static String convertUbbToHtml(Settings settings, Daten dataObj, BibTex bibtexObj, String c, int sourceframe, boolean isExport, boolean createHTMLFootnotes) {
         // create new string
-        String dummy = replaceUbbToHtml(c, settings.getMarkdownActivated(), (Constants.FRAME_DESKTOP == sourceframe), isExport);
+        String dummy = replaceUbbToHtml(c, settings.getMarkdownActivated(), (Constants.FRAME_DESKTOP == sourceframe), isExport, settings);
         // add title attributes to manual links
         int pos = 0;
         while (pos != -1) {
@@ -1328,7 +1328,12 @@ public class HtmlUbbUtil {
         return dummy;
     }
 
-    private static String replaceUbbToHtml(String dummy, boolean isMarkdownActivated, boolean isDesktop, boolean isExport) {
+    private static String replaceUbbToHtml(String dummy, boolean isMarkdownActivated, boolean isDesktop, boolean isExport, Settings settings) {
+        // Render [latex_block] and [latex] spans to <img> tags before any
+        // other regex runs, then swap in placeholders for the rest of the pipeline so
+        // the rendered HTML cannot be mangled by HTML-escaping or UBB tag conversion.
+        java.util.List<String> latexImages = new java.util.ArrayList<>();
+        dummy = protectLatexSpans(dummy, latexImages, settings);
         // replace headlines
         String head1, head2, head3, head4;
         String head1md, head2md, head3md, head4md;
@@ -1464,6 +1469,7 @@ public class HtmlUbbUtil {
         dummy = dummy.replaceAll("\\[z ([^\\[]*)\\](.*?)\\[/z\\]", "<a class=\"manlink\" href=\"#z_$1\">$2</a>");
         // remove all new lines after headlines
         dummy = dummy.replaceAll("\\</h([^\\<]*)\\>\\<br\\>", "</h$1>");
+        dummy = restoreLatexSpans(dummy, latexImages);
         return dummy;
     }
 
