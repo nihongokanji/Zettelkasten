@@ -1646,7 +1646,7 @@ public class HtmlUbbUtil {
                 tmp.delete();
             }
         }
-        return "<img src=\"" + cacheFile.toURI().toString() + "\"/>";
+        return "<img align=\"middle\" src=\"" + cacheFile.toURI().toString() + "\"/>";
     }
 
     private static String md5Hex(String input) throws IOException {
