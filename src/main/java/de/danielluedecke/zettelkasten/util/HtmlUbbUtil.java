@@ -1623,27 +1623,13 @@ public class HtmlUbbUtil {
         cacheDir.mkdirs();
         String hash = md5Hex(sanitizedLatex + "|" + style + "|" + scaledSize);
         File cacheFile = new File(cacheDir, hash + ".png");
-        File depthFile = new File(cacheDir, hash + ".depth");
-        // Depth (descent in pixels) is needed for the vertical-align CSS so descenders
-        // sit below the text baseline. Cached alongside the PNG to avoid re-rendering.
-        int depth = -1;
-        if (cacheFile.exists() && depthFile.exists()) {
-            try {
-                depth = Integer.parseInt(new String(
-                        java.nio.file.Files.readAllBytes(depthFile.toPath()),
-                        java.nio.charset.StandardCharsets.UTF_8).trim());
-            } catch (NumberFormatException ignore) {
-                // Corrupted sidecar — fall through to re-render.
-            }
-        }
-        if (depth < 0) {
+        if (!cacheFile.exists()) {
             TeXFormula formula = new TeXFormula(sanitizedLatex);
             TeXIcon icon = formula.new TeXIconBuilder()
                     .setStyle(style)
                     .setSize(scaledSize)
                     .setFGColor(Color.BLACK)
                     .build();
-            depth = icon.getIconDepth();
             BufferedImage image = new BufferedImage(
                     Math.max(1, icon.getIconWidth()),
                     Math.max(1, icon.getIconHeight()),
@@ -1654,19 +1640,13 @@ public class HtmlUbbUtil {
             } finally {
                 g.dispose();
             }
-            File pngTmp = new File(cacheDir, hash + ".png.tmp");
-            ImageIO.write(image, "png", pngTmp);
-            if (!pngTmp.renameTo(cacheFile)) {
-                pngTmp.delete();
-            }
-            File depthTmp = new File(cacheDir, hash + ".depth.tmp");
-            java.nio.file.Files.write(depthTmp.toPath(),
-                    Integer.toString(depth).getBytes(java.nio.charset.StandardCharsets.UTF_8));
-            if (!depthTmp.renameTo(depthFile)) {
-                depthTmp.delete();
+            File tmp = new File(cacheDir, hash + ".png.tmp");
+            ImageIO.write(image, "png", tmp);
+            if (!tmp.renameTo(cacheFile)) {
+                tmp.delete();
             }
         }
-        return "<img src=\"" + cacheFile.toURI().toString() + "\" style=\"vertical-align: -" + depth + "px\"/>";
+        return "<img src=\"" + cacheFile.toURI().toString() + "\"/>";
     }
 
     private static String md5Hex(String input) throws IOException {
