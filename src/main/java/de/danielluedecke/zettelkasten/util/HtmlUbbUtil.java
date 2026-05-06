@@ -1562,6 +1562,11 @@ public class HtmlUbbUtil {
         return dummy;
     }
 
+    // Multiplier applied to the configured body font size when rendering LaTeX.
+    // JLaTeXMath's setSize point value renders visibly smaller than the same
+    // point size used for body text; this brings them into visual parity.
+    private static final float LATEX_SIZE_SCALE = 1.4f;
+
     private static String protectLatexSpans(String input, java.util.List<String> images, Settings settings) {
         if (input == null || input.indexOf("[latex") == -1) {
             return input;
@@ -1610,15 +1615,19 @@ public class HtmlUbbUtil {
                 }
             }
         }
+        float scaledSize = size * LATEX_SIZE_SCALE;
+        // Strip Zkn3's [br] line-break tokens before rendering — JLaTeXMath would
+        // otherwise typeset them as literal "[br]" text inside the formula.
+        String sanitizedLatex = latex.replace("[br]", " ");
         File cacheDir = new File(System.getProperty("java.io.tmpdir"), "zettelkasten-latex-cache");
         cacheDir.mkdirs();
-        String hash = md5Hex(latex + "|" + style + "|" + size);
+        String hash = md5Hex(sanitizedLatex + "|" + style + "|" + scaledSize);
         File cacheFile = new File(cacheDir, hash + ".png");
         if (!cacheFile.exists()) {
-            TeXFormula formula = new TeXFormula(latex);
+            TeXFormula formula = new TeXFormula(sanitizedLatex);
             TeXIcon icon = formula.new TeXIconBuilder()
                     .setStyle(style)
-                    .setSize(size)
+                    .setSize(scaledSize)
                     .setFGColor(Color.BLACK)
                     .build();
             BufferedImage image = new BufferedImage(
