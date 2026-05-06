@@ -55,6 +55,19 @@ Subpackages:
 - **Logging**: use `Constants.zknlogger` (`java.util.logging`). `logback-classic` is on the classpath but the project standardizes on JUL; do not introduce a new logging facade without coordinating in `pom.xml`.
 - **Headlessness**: tests assume `java.awt.headless=true`. Core data/model classes should be instantiable headlessly — Swing references in `database/` are being actively removed (PR-SCOPE AC-06).
 
+### LaTeX rendering (`[latex]` / `[latex_block]` tags)
+
+The view pane renders `[latex]E=mc^2[/latex]` (inline) and `[latex_block]\int_0^1 x\,dx[/latex_block]` (display; multi-line content allowed) via JLaTeXMath. Rendering is **view-only**: the export and HTML→UBB reverse-conversion paths are deliberately untouched, so `.zkn3` files remain pure UBB text and stay compatible with unmodified upstream Zkn3. All code lives in `util/HtmlUbbUtil.java`.
+
+Pipeline:
+
+- `protectLatexSpans` / `replaceLatexMatches` run at the top of `replaceUbbToHtml`, render matches, and swap in `@@LATEXn@@` placeholders so the rendered HTML survives `<>` escaping and the rest of the UBB regex chain (placeholders restored just before return — mirrors `protectMarkdownCodeSpans`). Block tags are processed first to prevent the inline regex from partially matching them.
+- `renderLatexToImgTag` paints a `TeXIcon` onto a `BufferedImage` with transparent top/bottom padding sized so the math baseline lands at the image's vertical center, writes a PNG to `/tmp/zettelkasten-latex-cache/<md5hash>.png` (atomic via `.tmp` + `renameTo`), and returns `<img align="middle" src="file:..."/>`.
+- Cache key: `md5Hex(sanitizedLatex + "|" + style + "|" + scaledSize)`. `LATEX_SIZE_SCALE = 1.4f` brings JLaTeXMath's point size into visual parity with body text; `[br]` in the input is replaced with a space before rendering (Zkn3 stores newlines as `[br]`, which JLaTeXMath would otherwise typeset as literal letters).
+- Malformed LaTeX falls back to the raw `[latex]…[/latex]` text in the rendered view, logged at `FINE` via `Constants.zknlogger`.
+
+**Why `align="middle"` + canvas padding instead of CSS `vertical-align`:** JEditorPane's `HTMLEditorKit` has incomplete CSS support for inline images — an earlier attempt using `style="vertical-align: -Npx"` caused the view pane to fail first-render (reverted; preserved in git history). Every other `<img>` in Zkn3 uses HTML 4 attributes only (`src`, `width`, `height`, `border` — never inline `style`), and the LaTeX path matches that convention. Centering the math baseline inside the PNG and letting `align="middle"` do the layout work makes the math baseline coincide with the text baseline without touching CSS.
+
 ### Build/packaging plugins
 
 - `maven-shade-plugin` — produces the runnable fat JAR at `target/Zettelkasten.jar`.
