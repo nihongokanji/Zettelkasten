@@ -38,10 +38,14 @@ import de.danielluedecke.zettelkasten.util.misc.Comparer;
 import de.danielluedecke.zettelkasten.database.Daten;
 import de.danielluedecke.zettelkasten.database.Settings;
 import de.danielluedecke.zettelkasten.tasks.export.ExportTools;
+import java.awt.Color;
+import java.awt.Graphics2D;
 import java.awt.Image;
+import java.awt.image.BufferedImage;
 import java.io.File;
 import java.io.IOException;
 import java.net.URL;
+import java.security.MessageDigest;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Iterator;
@@ -54,6 +58,9 @@ import java.util.regex.PatternSyntaxException;
 import javax.imageio.ImageIO;
 import javax.swing.ImageIcon;
 import org.jdom2.Element;
+import org.scilab.forge.jlatexmath.TeXConstants;
+import org.scilab.forge.jlatexmath.TeXFormula;
+import org.scilab.forge.jlatexmath.TeXIcon;
 
 /**
  * This class is responsible for the creation of a html page of an zettelkasten
@@ -71,6 +78,11 @@ public class HtmlUbbUtil {
             getContext().getResourceMap(HtmlUbbUtil.class);
 
     private static final boolean IS_WINDOWS = System.getProperty("os.name").toLowerCase().startsWith("windows");
+
+    // Multiplier applied to the configured body font size when rendering LaTeX.
+    // JLaTeXMath's setSize point value renders visibly smaller than the same
+    // point size used for body text; this brings them into visual parity.
+    private static final float LATEX_SIZE_SCALE = 1.4f;
 
     private static String[] highlightTermsSearch = null;
     private static String[] highlightTermsKeywords = null;
@@ -2972,5 +2984,124 @@ public class HtmlUbbUtil {
         }
         // return finished entry
         return retval.toString();
+    }
+
+    private static String protectLatexSpans(String input, java.util.List<String> images, Settings settings) {
+        if (input == null || input.indexOf("[latex") == -1) {
+            return input;
+        }
+        // Process block tags first; their longer delimiters would otherwise be partially
+        // matched by the inline pattern.
+        String text = replaceLatexMatches(input,
+                Pattern.compile("\\[latex_block\\](.*?)\\[/latex_block\\]", Pattern.DOTALL),
+                TeXConstants.STYLE_DISPLAY, true, images, settings);
+        text = replaceLatexMatches(text,
+                Pattern.compile("\\[latex\\](.*?)\\[/latex\\]", Pattern.DOTALL),
+                TeXConstants.STYLE_TEXT, false, images, settings);
+        return text;
+    }
+
+    private static String replaceLatexMatches(String input, Pattern pattern, int style, boolean blockWrap,
+            java.util.List<String> images, Settings settings) {
+        Matcher m = pattern.matcher(input);
+        StringBuffer sb = new StringBuffer(input.length());
+        while (m.find()) {
+            String rendered;
+            try {
+                String img = renderLatexToImgTag(m.group(1), style, settings);
+                rendered = blockWrap ? "<div style=\"text-align:center;\">" + img + "</div>" : img;
+            } catch (Exception ex) {
+                Constants.zknlogger.log(Level.FINE, "LaTeX render failed; leaving raw tag in place", ex);
+                rendered = m.group(0);
+            }
+            int idx = images.size();
+            images.add(rendered);
+            m.appendReplacement(sb, Matcher.quoteReplacement(latexToken(idx)));
+        }
+        m.appendTail(sb);
+        return sb.toString();
+    }
+
+    private static String renderLatexToImgTag(String latex, int style, Settings settings) throws IOException {
+        float size = 16f;
+        if (settings != null) {
+            String configured = settings.getMainfont(Settings.FONTSIZE);
+            if (configured != null && !configured.isEmpty()) {
+                try {
+                    size = Float.parseFloat(configured);
+                } catch (NumberFormatException ignore) {
+                    // fall back to default size
+                }
+            }
+        }
+        float scaledSize = size * LATEX_SIZE_SCALE;
+        // Strip Zkn3's [br] line-break tokens before rendering — JLaTeXMath would
+        // otherwise typeset them as literal "[br]" text inside the formula.
+        String sanitizedLatex = latex.replace("[br]", " ");
+        File cacheDir = new File(System.getProperty("java.io.tmpdir"), "zettelkasten-latex-cache");
+        cacheDir.mkdirs();
+        String hash = md5Hex(sanitizedLatex + "|" + style + "|" + scaledSize);
+        File cacheFile = new File(cacheDir, hash + ".png");
+        if (!cacheFile.exists()) {
+            TeXFormula formula = new TeXFormula(sanitizedLatex);
+            TeXIcon icon = formula.new TeXIconBuilder()
+                    .setStyle(style)
+                    .setSize(scaledSize)
+                    .setFGColor(Color.BLACK)
+                    .build();
+            // Pad the canvas so the math baseline (at H-D from the top of the icon)
+            // lands at the vertical center of the resulting image. Combined with
+            // align="middle" on the <img>, this aligns math baseline with text baseline.
+            int iconHeight = icon.getIconHeight();
+            int iconDepth = icon.getIconDepth();
+            int extraTop = Math.max(0, 2 * iconDepth - iconHeight);
+            int extraBottom = Math.max(0, iconHeight - 2 * iconDepth);
+            BufferedImage image = new BufferedImage(
+                    Math.max(1, icon.getIconWidth()),
+                    Math.max(1, iconHeight + extraTop + extraBottom),
+                    BufferedImage.TYPE_INT_ARGB);
+            Graphics2D g = image.createGraphics();
+            try {
+                icon.paintIcon(null, g, 0, extraTop);
+            } finally {
+                g.dispose();
+            }
+            File tmp = new File(cacheDir, hash + ".png.tmp");
+            ImageIO.write(image, "png", tmp);
+            if (!tmp.renameTo(cacheFile)) {
+                tmp.delete();
+            }
+        }
+        return "<img align=\"middle\" src=\"" + cacheFile.toURI().toString() + "\"/>";
+    }
+
+    private static String md5Hex(String input) throws IOException {
+        try {
+            MessageDigest md = MessageDigest.getInstance("MD5");
+            byte[] digest = md.digest(input.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            StringBuilder hex = new StringBuilder(digest.length * 2);
+            for (byte b : digest) {
+                hex.append(Character.forDigit((b >> 4) & 0xF, 16));
+                hex.append(Character.forDigit(b & 0xF, 16));
+            }
+            return hex.toString();
+        } catch (java.security.NoSuchAlgorithmException ex) {
+            throw new IOException("MD5 algorithm not available", ex);
+        }
+    }
+
+    private static String restoreLatexSpans(String input, java.util.List<String> images) {
+        if (images.isEmpty()) {
+            return input;
+        }
+        String restored = input;
+        for (int i = 0; i < images.size(); i++) {
+            restored = restored.replace(latexToken(i), images.get(i));
+        }
+        return restored;
+    }
+
+    private static String latexToken(int index) {
+        return "@@LATEX" + index + "@@";
     }
 }
