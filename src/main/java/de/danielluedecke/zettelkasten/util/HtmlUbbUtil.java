@@ -1630,13 +1630,20 @@ public class HtmlUbbUtil {
                     .setSize(scaledSize)
                     .setFGColor(Color.BLACK)
                     .build();
+            // Pad the canvas so the math baseline (at H-D from the top of the icon)
+            // lands at the vertical center of the resulting image. Combined with
+            // align="middle" on the <img>, this aligns math baseline with text baseline.
+            int iconHeight = icon.getIconHeight();
+            int iconDepth = icon.getIconDepth();
+            int extraTop = Math.max(0, 2 * iconDepth - iconHeight);
+            int extraBottom = Math.max(0, iconHeight - 2 * iconDepth);
             BufferedImage image = new BufferedImage(
                     Math.max(1, icon.getIconWidth()),
-                    Math.max(1, icon.getIconHeight()),
+                    Math.max(1, iconHeight + extraTop + extraBottom),
                     BufferedImage.TYPE_INT_ARGB);
             Graphics2D g = image.createGraphics();
             try {
-                icon.paintIcon(null, g, 0, 0);
+                icon.paintIcon(null, g, 0, extraTop);
             } finally {
                 g.dispose();
             }
