@@ -84,6 +84,13 @@ public class HtmlUbbUtil {
     // point size used for body text; this brings them into visual parity.
     private static final float LATEX_SIZE_SCALE = 1.4f;
 
+    // Oversample factor for LaTeX PNG rendering. Java's HiDPI scaling
+    // (e.g. -Dsun.java2d.uiScale=3.0) upsamples 1x raster images via interpolation,
+    // making them blurry next to crisp vector text. Rendering at this multiple of
+    // the logical size and emitting logical width/height attributes keeps the
+    // image sharp on HiDPI displays without affecting layout.
+    private static final float HIDPI_OVERSAMPLE = 3.0f;
+
     private static String[] highlightTermsSearch = null;
     private static String[] highlightTermsKeywords = null;
     private static String[] highlightTermsLivesearch = null;
@@ -3040,31 +3047,38 @@ public class HtmlUbbUtil {
                 }
             }
         }
-        float scaledSize = size * LATEX_SIZE_SCALE;
+        float scaledSize = size * LATEX_SIZE_SCALE;       // logical (1x) size
+        float renderSize = scaledSize * HIDPI_OVERSAMPLE; // oversampled render size
         // Strip Zkn3's [br] line-break tokens before rendering — JLaTeXMath would
         // otherwise typeset them as literal "[br]" text inside the formula.
         String sanitizedLatex = latex.replace("[br]", " ");
         File cacheDir = new File(System.getProperty("java.io.tmpdir"), "zettelkasten-latex-cache");
         cacheDir.mkdirs();
-        String hash = md5Hex(sanitizedLatex + "|" + style + "|" + scaledSize);
+        String hash = md5Hex(sanitizedLatex + "|" + style + "|" + scaledSize + "|" + HIDPI_OVERSAMPLE);
         File cacheFile = new File(cacheDir, hash + ".png");
+        int logicalWidth;
+        int logicalHeight;
         if (!cacheFile.exists()) {
             TeXFormula formula = new TeXFormula(sanitizedLatex);
             TeXIcon icon = formula.new TeXIconBuilder()
                     .setStyle(style)
-                    .setSize(scaledSize)
+                    .setSize(renderSize)
                     .setFGColor(Color.BLACK)
                     .build();
             // Pad the canvas so the math baseline (at H-D from the top of the icon)
             // lands at the vertical center of the resulting image. Combined with
             // align="middle" on the <img>, this aligns math baseline with text baseline.
+            // Padding stays in oversampled pixel space — the geometric center
+            // alignment is scale-invariant.
             int iconHeight = icon.getIconHeight();
             int iconDepth = icon.getIconDepth();
             int extraTop = Math.max(0, 2 * iconDepth - iconHeight);
             int extraBottom = Math.max(0, iconHeight - 2 * iconDepth);
+            int oversampledWidth = Math.max(1, icon.getIconWidth());
+            int oversampledHeight = Math.max(1, iconHeight + extraTop + extraBottom);
             BufferedImage image = new BufferedImage(
-                    Math.max(1, icon.getIconWidth()),
-                    Math.max(1, iconHeight + extraTop + extraBottom),
+                    oversampledWidth,
+                    oversampledHeight,
                     BufferedImage.TYPE_INT_ARGB);
             Graphics2D g = image.createGraphics();
             try {
@@ -3077,8 +3091,17 @@ public class HtmlUbbUtil {
             if (!tmp.renameTo(cacheFile)) {
                 tmp.delete();
             }
+            logicalWidth = (int) Math.ceil(oversampledWidth / HIDPI_OVERSAMPLE);
+            logicalHeight = (int) Math.ceil(oversampledHeight / HIDPI_OVERSAMPLE);
+        } else {
+            // Cache hit — recover logical dims from the on-disk PNG (which was
+            // written at oversampled resolution by an earlier call).
+            BufferedImage cached = ImageIO.read(cacheFile);
+            logicalWidth = (int) Math.ceil(cached.getWidth() / HIDPI_OVERSAMPLE);
+            logicalHeight = (int) Math.ceil(cached.getHeight() / HIDPI_OVERSAMPLE);
         }
-        return "<img align=\"middle\" src=\"" + cacheFile.toURI().toString() + "\"/>";
+        return "<img align=\"middle\" width=\"" + logicalWidth + "\" height=\"" + logicalHeight
+                + "\" src=\"" + cacheFile.toURI().toString() + "\"/>";
     }
 
     private static String md5Hex(String input) throws IOException {
